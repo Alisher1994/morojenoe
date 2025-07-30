@@ -151,57 +151,143 @@ async def main():
             if await search_button.count() == 0:
                 search_button = page.locator('button:has-text("Поиск"), input[type="submit"]')
             
-            # Ждем ответ от сервера
+            # Сохраняем старые данные таблицы для сравнения
+            old_table_content = ""
             try:
-                async with page.expect_response(lambda r: "courses_report" in r.url and r.status == 200, timeout=60000) as response_info:
-                    await search_button.first.click()
-                await response_info.value
-                print("Фильтры применены, данные загружены.")
+                table = page.locator('table, .table, tbody')
+                if await table.count() > 0:
+                    old_table_content = await table.first.inner_text()
             except:
-                print("Не дождались ответа от сервера, продолжаем...")
-                await page.wait_for_timeout(5000)
+                pass
+            
+            print("Нажимаю кнопку 'Начать поиск'...")
+            await search_button.first.click()
+            
+            # Ждем обновления таблицы - несколько способов
+            table_updated = False
+            max_attempts = 20  # 20 секунд максимум
+            
+            for attempt in range(max_attempts):
+                await page.wait_for_timeout(1000)
+                
+                try:
+                    # Способ 1: Ждем сетевой запрос
+                    if not table_updated:
+                        try:
+                            await page.wait_for_response(
+                                lambda r: "courses_report" in r.url and r.status == 200, 
+                                timeout=2000
+                            )
+                            table_updated = True
+                            print(f"Получен ответ от сервера на попытке {attempt + 1}")
+                            break
+                        except:
+                            pass
+                    
+                    # Способ 2: Проверяем изменение содержимого таблицы
+                    table = page.locator('table, .table, tbody')
+                    if await table.count() > 0:
+                        current_table_content = await table.first.inner_text()
+                        if current_table_content != old_table_content and current_table_content.strip():
+                            table_updated = True
+                            print(f"Таблица обновилась на попытке {attempt + 1}")
+                            break
+                    
+                    # Способ 3: Проверяем индикатор загрузки
+                    loading_indicator = page.locator('.loading, .spinner, [data-loading="true"]')
+                    if await loading_indicator.count() == 0:
+                        # Если нет индикатора загрузки, даем дополнительное время
+                        if attempt > 5:  # После 5 секунд
+                            table_updated = True
+                            print(f"Нет индикатора загрузки, считаем что данные загружены на попытке {attempt + 1}")
+                            break
+                            
+                except Exception as e:
+                    print(f"Ошибка при проверке обновления таблицы: {e}")
+                    continue
+            
+            if not table_updated:
+                print("Таблица может быть не обновилась, но продолжаем...")
+            
+            # Дополнительная пауза для стабильности
+            await page.wait_for_timeout(3000)
+            print("Данные должны быть загружены, начинаю сбор информации.")
 
             # --- Шаг 3: Сбор данных из таблицы ---
             log_steps.append("3. Собираю данные из таблицы...")
             
-            # Ждем появления таблицы
-            await page.wait_for_timeout(3000)
+            # Проверяем, есть ли данные в таблице
+            table_rows = page.locator('tbody tr, table tr')
+            row_count = await table_rows.count()
+            print(f"Найдено строк в таблице: {row_count}")
+            
+            if row_count == 0:
+                print("⚠️ Таблица пуста! Возможно данных за выбранную дату нет.")
+            
+            # Выводим содержимое таблицы для отладки
+            try:
+                table = page.locator('table, .table')
+                if await table.count() > 0:
+                    table_text = await table.first.inner_text()
+                    print(f"Содержимое таблицы:\n{table_text[:500]}...")
+            except:
+                pass
+            
+            # Импортируем regex для работы с числами
+            import re
             
             for item_name in ITEMS_TO_FIND:
                 print(f"Ищу товар: {item_name}")
                 
-                # Различные варианты поиска строки в таблице
-                row_selectors = [
-                    f'tr:has-text("{item_name}")',
-                    f'tr td:has-text("{item_name}")',
-                    f'tbody tr:has-text("{item_name}")'
-                ]
+                # Сначала получаем все строки таблицы
+                table_rows = page.locator('tbody tr, table tr')
+                found = False
                 
-                row = None
-                for selector in row_selectors:
-                    row = page.locator(selector)
-                    if await row.count() > 0:
-                        break
-                
-                if row and await row.count() > 0:
-                    try:
-                        # Пробуем разные варианты получения количества
-                        quantity_cell = row.locator("td").nth(2)
-                        if await quantity_cell.count() == 0:
-                            quantity_cell = row.locator("td").nth(1)
+                for i in range(await table_rows.count()):
+                    row = table_rows.nth(i)
+                    row_text = await row.inner_text()
+                    
+                    # Проверяем, содержит ли строка искомый товар
+                    if item_name in row_text:
+                        print(f"  - Найдена строка: {row_text}")
                         
-                        quantity_text = await quantity_cell.inner_text()
-                        # Извлекаем только числа
-                        import re
-                        numbers = re.findall(r'\d+', quantity_text)
-                        if numbers:
-                            results[item_name] = int(numbers[0])
-                            print(f"  - Найдено '{item_name}': {results[item_name]} шт.")
-                        else:
-                            print(f"  - Не удалось извлечь количество для '{item_name}': {quantity_text}")
-                    except Exception as e:
-                        print(f"  - Ошибка при получении количества для '{item_name}': {e}")
-                else:
+                        try:
+                            # Получаем все ячейки в строке
+                            cells = row.locator('td')
+                            cell_count = await cells.count()
+                            
+                            print(f"  - Количество ячеек в строке: {cell_count}")
+                            
+                            # Проходим по всем ячейкам и ищем число (количество)
+                            for cell_idx in range(cell_count):
+                                cell = cells.nth(cell_idx)
+                                cell_text = await cell.inner_text()
+                                
+                                # Ищем числа в ячейке
+                                numbers = re.findall(r'\d+', cell_text.strip())
+                                if numbers and cell_text.strip().isdigit():
+                                    # Если ячейка содержит только число, это скорее всего количество
+                                    results[item_name] = int(numbers[0])
+                                    print(f"  - Найдено '{item_name}': {results[item_name]} шт. (ячейка {cell_idx}: '{cell_text}')")
+                                    found = True
+                                    break
+                            
+                            # Если не нашли чистое число, берем последнее число из последней ячейки
+                            if not found and cell_count > 0:
+                                last_cell = cells.nth(cell_count - 1)
+                                last_cell_text = await last_cell.inner_text()
+                                numbers = re.findall(r'\d+', last_cell_text)
+                                if numbers:
+                                    results[item_name] = int(numbers[-1])  # Берем последнее число
+                                    print(f"  - Найдено '{item_name}': {results[item_name]} шт. (из последней ячейки: '{last_cell_text}')")
+                                    found = True
+                                    
+                        except Exception as e:
+                            print(f"  - Ошибка при обработке строки для '{item_name}': {e}")
+                        
+                        break  # Выходим из цикла, так как товар найден
+                
+                if not found:
                     print(f"  - Товар '{item_name}' не найден в отчете (количество 0).")
 
             # --- Шаг 4: Формирование и отправка отчета ---
