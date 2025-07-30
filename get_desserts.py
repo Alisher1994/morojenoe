@@ -213,89 +213,84 @@ async def main():
             await page.wait_for_timeout(3000)
             print("Данные должны быть загружены, начинаю сбор информации.")
 
-            # --- Шаг 3: Сбор данных из таблицы ---
+            # --- Шаг 3: ИСПРАВЛЕННЫЙ сбор данных из таблицы ---
             log_steps.append("3. Собираю данные из таблицы...")
-            
-            # Проверяем, есть ли данные в таблице
-            table_rows = page.locator('tbody tr, table tr')
-            row_count = await table_rows.count()
-            print(f"Найдено строк в таблице: {row_count}")
-            
-            if row_count == 0:
-                print("⚠️ Таблица пуста! Возможно данных за выбранную дату нет.")
-            
-            # Выводим содержимое таблицы для отладки
-            try:
-                table = page.locator('table, .table')
-                if await table.count() > 0:
-                    table_text = await table.first.inner_text()
-                    print(f"Содержимое таблицы:\n{table_text[:500]}...")
-            except:
-                pass
             
             # Импортируем regex для работы с числами
             import re
             
-            for item_name in ITEMS_TO_FIND:
-                print(f"Ищу товар: {item_name}")
+            # Ищем основную таблицу с данными
+            main_table = page.locator('table.main_table, table.data_table, #courses')
+            if await main_table.count() == 0:
+                main_table = page.locator('table')
+            
+            if await main_table.count() > 0:
+                print("Найдена основная таблица с данными")
                 
-                # Сначала получаем все строки таблицы
-                table_rows = page.locator('tbody tr, table tr')
-                found = False
+                # Получаем все строки из tbody (исключая заголовки)
+                data_rows = main_table.locator('tbody tr').filter(lambda row: not row.get_attribute('class') or 'table_top' not in row.get_attribute('class'))
                 
-                for i in range(await table_rows.count()):
-                    row = table_rows.nth(i)
-                    row_text = await row.inner_text()
+                row_count = await data_rows.count()
+                print(f"Найдено строк с данными: {row_count}")
+                
+                for item_name in ITEMS_TO_FIND:
+                    print(f"\nИщу товар: {item_name}")
+                    found = False
                     
-                    # Проверяем, содержит ли строка искомый товар
-                    if item_name in row_text:
-                        print(f"  - Найдена строка: {row_text}")
+                    for i in range(row_count):
+                        row = data_rows.nth(i)
                         
-                        try:
-                            # Получаем все ячейки в строке
-                            cells = row.locator('td')
-                            cell_count = await cells.count()
+                        # Получаем все ячейки в строке
+                        cells = row.locator('td')
+                        cell_count = await cells.count()
+                        
+                        if cell_count >= 3:  # Минимум должно быть 3 ячейки (№, Название, Количество)
+                            # Вторая ячейка - название товара
+                            name_cell = cells.nth(1)
+                            name_text = await name_cell.inner_text()
                             
-                            print(f"  - Количество ячеек в строке: {cell_count}")
-                            
-                            # Проходим по всем ячейкам и ищем число (количество)
-                            for cell_idx in range(cell_count):
-                                cell = cells.nth(cell_idx)
-                                cell_text = await cell.inner_text()
+                            if item_name in name_text.strip():
+                                print(f"  ✓ Найден товар в строке {i+1}: {name_text.strip()}")
                                 
-                                # Ищем числа в ячейке
-                                numbers = re.findall(r'\d+', cell_text.strip())
-                                if numbers and cell_text.strip().isdigit():
-                                    # Если ячейка содержит только число, это скорее всего количество
-                                    results[item_name] = int(numbers[0])
-                                    print(f"  - Найдено '{item_name}': {results[item_name]} шт. (ячейка {cell_idx}: '{cell_text}')")
-                                    found = True
-                                    break
-                            
-                            # Если не нашли чистое число, берем последнее число из последней ячейки
-                            if not found and cell_count > 0:
-                                last_cell = cells.nth(cell_count - 1)
-                                last_cell_text = await last_cell.inner_text()
-                                numbers = re.findall(r'\d+', last_cell_text)
-                                if numbers:
-                                    results[item_name] = int(numbers[-1])  # Берем последнее число
-                                    print(f"  - Найдено '{item_name}': {results[item_name]} шт. (из последней ячейки: '{last_cell_text}')")
-                                    found = True
-                                    
-                        except Exception as e:
-                            print(f"  - Ошибка при обработке строки для '{item_name}': {e}")
+                                # Третья ячейка - количество
+                                qty_cell = cells.nth(2)
+                                qty_text = await qty_cell.inner_text()
+                                
+                                print(f"  - Текст ячейки с количеством: '{qty_text.strip()}'")
+                                
+                                # Извлекаем число из ячейки количества
+                                qty_numbers = re.findall(r'\d+', qty_text.strip())
+                                if qty_numbers:
+                                    results[item_name] = int(qty_numbers[0])
+                                    print(f"  ✓ '{item_name}': {results[item_name]} шт.")
+                                else:
+                                    print(f"  ⚠️ Не удалось извлечь число из '{qty_text}'")
+                                
+                                found = True
+                                break
+                    
+                    if not found:
+                        print(f"  ❌ Товар '{item_name}' не найден в таблице")
                         
-                        break  # Выходим из цикла, так как товар найден
-                
-                if not found:
-                    print(f"  - Товар '{item_name}' не найден в отчете (количество 0).")
+            else:
+                print("❌ Основная таблица не найдена!")
+                # Выводим всю страницу для отладки
+                page_content = await page.content()
+                print("Содержимое страницы (первые 1000 символов):")
+                print(page_content[:1000])
 
             # --- Шаг 4: Формирование и отправка отчета ---
             log_steps.append("4. Формирую и отправляю отчет...")
             yesterday_str = yesterday.strftime('%d.%m.%Y')
             report_lines = [f"<b>Отчет по десертам (Tandoor) за {yesterday_str}</b>", ""]
+            
+            total_items = 0
             for name, qty in results.items():
                 report_lines.append(f"<b>{name}:</b> {qty} шт.")
+                total_items += qty
+            
+            report_lines.append("")
+            report_lines.append(f"<b>Всего десертов:</b> {total_items} шт.")
             
             await send_report("\n".join(report_lines))
             print("Отчет успешно отправлен!")
