@@ -2,7 +2,7 @@ import os
 import asyncio
 import traceback
 import datetime
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright
 from telegram import Bot
 from dotenv import load_dotenv
 
@@ -57,34 +57,30 @@ async def main():
             await page.wait_for_url("**/users/sign_in")
             await page.locator('#user_email').fill(JOWI_LOGIN)
             await page.locator('input[name="user[password]"]').fill(JOWI_PASSWORD)
-            await page.locator('button:has-text("Войти")').first.click()
+            await page.locator('button:has-text("Войти")').first().click()
             await page.wait_for_url(COURSES_REPORT_URL)
             print("Вход выполнен, нахожусь на странице отчета по блюдам.")
 
             # --- Шаг 2: Применение фильтров ---
-            log_steps.append("2. Применяю фильтры 'Вчера' и 'Десерты'...")
+            log_steps.append("2. Применяю фильтры 'Вчера' (через календарь) и 'Десерты'...")
             
-            # --- УЛУЧШЕННЫЙ ВЫБОР ДАТЫ ---
-            try:
-                # Основной способ: выбрать "Вчера" из списка
-                print("  - Пытаюсь выбрать 'Вчера' из списка...")
-                await page.locator('#standatr_date').select_option("2", timeout=15000)
-                print("  - 'Вчера' успешно выбрано.")
-            except PlaywrightTimeoutError:
-                # Запасной способ: выбрать дату в календаре вручную
-                print("  - Не удалось выбрать 'Вчера' из списка. Переключаюсь на ручной выбор в календаре.")
-                yesterday_date = datetime.date.today() - datetime.timedelta(days=1)
-                yesterday_day_str = str(yesterday_date.day)
-                await page.locator('input[name="from_date"]').click()
-                await page.get_by_role('cell', {'name': yesterday_day_str, 'exact': True}).first.click()
-                await page.locator('input[name="to_date"]').click()
-                await page.get_by_role('cell', {'name': yesterday_day_str, 'exact': True}).first.click()
-                print(f"  - Вручную выбрана дата: {yesterday_date.strftime('%d.%m.%Y')}")
+            # --- НОВЫЙ ВЫБОР ДАТЫ ВРУЧНУЮ ---
+            yesterday = datetime.date.today() - datetime.timedelta(days=1)
+            yesterday_day_str = str(yesterday.day)
+            
+            # Выбираем дату "От"
+            await page.get_by_role('textbox', name='От:').click()
+            await page.get_by_role('cell', name=yesterday_day_str, exact=True).first.click()
+            print(f"  - Выбрана дата 'От': {yesterday.strftime('%d.%m.%Y')}")
 
-            # --- УЛУЧШЕННЫЙ ВЫБОР КАТЕГОРИИ ---
+            # Выбираем дату "До"
+            await page.get_by_role('textbox', name='До:').click()
+            await page.get_by_role('cell', name=yesterday_day_str, exact=True).first.click()
+            print(f"  - Выбрана дата 'До': {yesterday.strftime('%d.%m.%Y')}")
+
+            # --- ВЫБОР КАТЕГОРИИ ---
             await page.get_by_role('textbox', name='Категории').click()
-            # Добавляем паузу, чтобы список успел появиться
-            await page.wait_for_timeout(1000) 
+            await page.wait_for_timeout(1000) # Пауза для появления списка
             await page.locator('.ui-menu-item-wrapper:has-text("Десерты")').click()
             print("  - Категория 'Десерты' выбрана.")
 
@@ -106,7 +102,7 @@ async def main():
                     print(f"  - Товар '{item_name}' не найден в отчете (количество 0).")
 
             # --- Шаг 4: Формирование и отправка отчета ---
-            yesterday_str = (datetime.date.today() - datetime.timedelta(days=1)).strftime('%d.%m.%Y')
+            yesterday_str = yesterday.strftime('%d.%m.%Y')
             report_lines = [f"<b>Отчет по десертам (Tandoor) за {yesterday_str}</b>", ""]
             for name, qty in results.items():
                 report_lines.append(f"<b>{name}:</b> {qty} шт.")
@@ -116,14 +112,14 @@ async def main():
         except Exception:
             # --- Обработка любой ошибки ---
             print("Произошла критическая ошибка!")
-            await page.screenshot(path=screenshot_path)
+            await page.screenshot(path="dessert_report_error.png")
             error_trace = traceback.format_exc()
             error_details = (
                 f"<b>Критическая ошибка при получении отчета по десертам</b>\n\n"
                 f"❌ <b>Сбой на шаге:</b>\n<code>{log_steps[-1]}</code>\n\n"
                 f"📄 <b>Технические детали:</b>\n<pre>{error_trace.splitlines()[-1]}</pre>"
             )
-            await send_report(error_details, photo_path=screenshot_path)
+            await send_report(error_details, photo_path="dessert_report_error.png")
         
         finally:
             await browser.close()
