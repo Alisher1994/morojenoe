@@ -57,30 +57,31 @@ async def main():
             await page.wait_for_url("**/users/sign_in")
             await page.locator('#user_email').fill(JOWI_LOGIN)
             await page.locator('input[name="user[password]"]').fill(JOWI_PASSWORD)
-            await page.locator('button:has-text("Войти")').first().click()
+            
+            # --- ИСПРАВЛЕННАЯ СТРОКА ---
+            await page.locator('button:has-text("Войти")').first.click()
+            
             await page.wait_for_url(COURSES_REPORT_URL)
             print("Вход выполнен, нахожусь на странице отчета по блюдам.")
 
             # --- Шаг 2: Применение фильтров ---
-            log_steps.append("2. Применяю фильтры 'Вчера' (через календарь) и 'Десерты'...")
+            log_steps.append("2. Применяю фильтры 'Вчера' и 'Десерты'...")
             
-            # --- НОВЫЙ ВЫБОР ДАТЫ ВРУЧНУЮ ---
+            # Выбираем дату в календаре вручную
             yesterday = datetime.date.today() - datetime.timedelta(days=1)
             yesterday_day_str = str(yesterday.day)
             
-            # Выбираем дату "От"
             await page.get_by_role('textbox', name='От:').click()
             await page.get_by_role('cell', name=yesterday_day_str, exact=True).first.click()
             print(f"  - Выбрана дата 'От': {yesterday.strftime('%d.%m.%Y')}")
 
-            # Выбираем дату "До"
             await page.get_by_role('textbox', name='До:').click()
             await page.get_by_role('cell', name=yesterday_day_str, exact=True).first.click()
             print(f"  - Выбрана дата 'До': {yesterday.strftime('%d.%m.%Y')}")
 
-            # --- ВЫБОР КАТЕГОРИИ ---
+            # Выбираем категорию
             await page.get_by_role('textbox', name='Категории').click()
-            await page.wait_for_timeout(1000) # Пауза для появления списка
+            await page.wait_for_timeout(1000)
             await page.locator('.ui-menu-item-wrapper:has-text("Десерты")').click()
             print("  - Категория 'Десерты' выбрана.")
 
@@ -112,7 +113,7 @@ async def main():
         except Exception:
             # --- Обработка любой ошибки ---
             print("Произошла критическая ошибка!")
-            await page.screenshot(path="dessert_report_error.png")
+            await page.screenshot(path=screenshot_path)
             error_trace = traceback.format_exc()
             error_details = (
                 f"<b>Критическая ошибка при получении отчета по десертам</b>\n\n"
