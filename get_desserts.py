@@ -2,7 +2,7 @@ import os
 import asyncio
 import traceback
 import datetime
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from telegram import Bot
 from dotenv import load_dotenv
 
@@ -64,29 +64,41 @@ async def main():
             # --- Шаг 2: Применение фильтров ---
             log_steps.append("2. Применяю фильтры 'Вчера' и 'Десерты'...")
             
-            # Начинаем ждать ответ от сервера ДО применения всех фильтров
+            # --- УЛУЧШЕННЫЙ ВЫБОР ДАТЫ ---
+            try:
+                # Основной способ: выбрать "Вчера" из списка
+                print("  - Пытаюсь выбрать 'Вчера' из списка...")
+                await page.locator('#standatr_date').select_option("2", timeout=15000)
+                print("  - 'Вчера' успешно выбрано.")
+            except PlaywrightTimeoutError:
+                # Запасной способ: выбрать дату в календаре вручную
+                print("  - Не удалось выбрать 'Вчера' из списка. Переключаюсь на ручной выбор в календаре.")
+                yesterday_date = datetime.date.today() - datetime.timedelta(days=1)
+                yesterday_day_str = str(yesterday_date.day)
+                await page.locator('input[name="from_date"]').click()
+                await page.get_by_role('cell', {'name': yesterday_day_str, 'exact': True}).first.click()
+                await page.locator('input[name="to_date"]').click()
+                await page.get_by_role('cell', {'name': yesterday_day_str, 'exact': True}).first.click()
+                print(f"  - Вручную выбрана дата: {yesterday_date.strftime('%d.%m.%Y')}")
+
+            # --- УЛУЧШЕННЫЙ ВЫБОР КАТЕГОРИИ ---
+            await page.get_by_role('textbox', name='Категории').click()
+            # Добавляем паузу, чтобы список успел появиться
+            await page.wait_for_timeout(1000) 
+            await page.locator('.ui-menu-item-wrapper:has-text("Десерты")').click()
+            print("  - Категория 'Десерты' выбрана.")
+
+            # Начинаем ждать ответ от сервера и нажимаем поиск
             async with page.expect_response(lambda r: "courses_report" in r.url and r.status == 200) as response_info:
-                # Выбираем "Вчера"
-                await page.locator('#standatr_date').select_option("2")
-                # Выбираем категорию "Десерты"
-                await page.get_by_role('textbox', name='Категории').click()
-                await page.locator('.ui-menu-item-wrapper:has-text("Десерты")').click()
-                # Нажимаем поиск
                 await page.get_by_role('button', name='Начать поиск').click()
-            
-            # Ждем завершения сетевого запроса, который был вызван поиском
             await response_info.value
             print("Фильтры применены, данные загружены.")
 
             # --- Шаг 3: Сбор данных из таблицы ---
             log_steps.append("3. Собираю данные из таблицы...")
-            
             for item_name in ITEMS_TO_FIND:
-                # Ищем строку таблицы, содержащую название нашего товара
                 row = page.locator(f'tr:has-text("{item_name}")')
-                
                 if await row.count() > 0:
-                    # Если строка найдена, берем текст из 3-й ячейки (Кол-во)
                     quantity_text = await row.locator("td").nth(2).inner_text()
                     results[item_name] = int(quantity_text)
                     print(f"  - Найдено '{item_name}': {quantity_text} шт.")
@@ -95,10 +107,7 @@ async def main():
 
             # --- Шаг 4: Формирование и отправка отчета ---
             yesterday_str = (datetime.date.today() - datetime.timedelta(days=1)).strftime('%d.%m.%Y')
-            report_lines = [
-                f"<b>Отчет по десертам (Tandoor) за {yesterday_str}</b>",
-                ""
-            ]
+            report_lines = [f"<b>Отчет по десертам (Tandoor) за {yesterday_str}</b>", ""]
             for name, qty in results.items():
                 report_lines.append(f"<b>{name}:</b> {qty} шт.")
             
