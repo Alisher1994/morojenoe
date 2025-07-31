@@ -2,7 +2,7 @@ import os
 import asyncio
 import traceback
 import datetime
-import re  # Move import to the top
+import re
 from playwright.async_api import async_playwright
 from telegram import Bot
 from dotenv import load_dotenv
@@ -40,6 +40,39 @@ async def send_report(message: str, photo_path: str = None):
     except Exception as e:
         print(f"Ошибка при отправке в Telegram: {e}")
 
+async def wait_for_table_update(page, old_content, max_wait=30):
+    """Ждет обновления таблицы после применения фильтров."""
+    print("Ожидаю обновления таблицы...")
+    
+    for i in range(max_wait):
+        await page.wait_for_timeout(1000)
+        
+        # Проверяем наличие индикатора загрузки
+        loader = page.locator('.h_loader, .loader, .loading')
+        if await loader.count() > 0:
+            is_visible = await loader.is_visible()
+            if is_visible:
+                print(f"  Обнаружен индикатор загрузки (попытка {i+1})")
+                # Ждем пока индикатор исчезнет
+                try:
+                    await loader.wait_for(state="hidden", timeout=5000)
+                    print("  Индикатор загрузки исчез")
+                except:
+                    pass
+        
+        # Проверяем изменение содержимого таблицы
+        try:
+            current_content = await page.locator('#courses tbody').inner_html()
+            if current_content != old_content and len(current_content) > 100:
+                print(f"Таблица обновилась (попытка {i+1})")
+                # Дополнительная пауза для стабильности
+                await page.wait_for_timeout(2000)
+                return True
+        except:
+            pass
+    
+    return False
+
 async def main():
     """Основной цикл скрипта."""
     results = {item: 0 for item in ITEMS_TO_FIND}
@@ -75,11 +108,9 @@ async def main():
                 await email_field.fill(JOWI_LOGIN)
                 await page.locator('input[name="user[password]"]').fill(JOWI_PASSWORD)
                 
-                # Исправленный селектор кнопки входа
                 login_button = page.locator('input[type="submit"][value="Войти"], button:has-text("Войти")')
                 await login_button.first.click()
                 
-                # Ждем успешной авторизации
                 await page.wait_for_url(COURSES_REPORT_URL, timeout=30000)
                 print("Авторизация успешна")
             else:
@@ -90,205 +121,132 @@ async def main():
             
             # Ждем полной загрузки страницы
             await page.wait_for_load_state('networkidle')
+            await page.wait_for_timeout(3000)
+            
+            # Сохраняем текущее состояние таблицы
+            old_table_content = ""
+            try:
+                old_table_content = await page.locator('#courses tbody').inner_html()
+            except:
+                pass
+            
+            # Выбираем "Вчера" из выпадающего списка
+            print("Выбираю период 'Вчера'...")
+            standart_date_select = page.locator('#standatr_date')
+            await standart_date_select.select_option('2')  # 2 = Вчера
+            
+            # Ждем обновления дат в полях
             await page.wait_for_timeout(2000)
             
-            # Выбираем дату в календаре вручную
             yesterday = datetime.date.today() - datetime.timedelta(days=1)
-            yesterday_day_str = str(yesterday.day)
+            print(f"Установлена дата: {yesterday.strftime('%d.%m.%Y')}")
             
-            print(f"Устанавливаю дату: {yesterday.strftime('%d.%m.%Y')}")
-            
-            # Поле "От"
-            from_field = page.get_by_role('textbox', name='От:')
-            if await from_field.count() == 0:
-                from_field = page.locator('input[placeholder*="От"], input[name*="from"], input[id*="from"]')
-            
-            await from_field.first.click()
+            # Выбираем категорию "Десерты"
+            print("Выбираю категорию 'Десерты'...")
+            category_field = page.locator('#crep_cat_search')
+            await category_field.click()
             await page.wait_for_timeout(1000)
             
-            # Выбираем день в календаре
-            day_cell = page.get_by_role('cell', name=yesterday_day_str, exact=True)
-            if await day_cell.count() > 0:
-                await day_cell.first.click()
-            else:
-                print(f"Не найдена ячейка с днем {yesterday_day_str}")
-            
-            print(f"  - Выбрана дата 'От': {yesterday.strftime('%d.%m.%Y')}")
-
-            # Поле "До"
-            to_field = page.get_by_role('textbox', name='До:')
-            if await to_field.count() == 0:
-                to_field = page.locator('input[placeholder*="До"], input[name*="to"], input[id*="to"]')
-                
-            await to_field.first.click()
-            await page.wait_for_timeout(1000)
-            
-            day_cell = page.get_by_role('cell', name=yesterday_day_str, exact=True)
-            if await day_cell.count() > 0:
-                await day_cell.first.click()
-            else:
-                print(f"Не найдена ячейка с днем {yesterday_day_str}")
-                
-            print(f"  - Выбрана дата 'До': {yesterday.strftime('%d.%m.%Y')}")
-
-            # Выбираем категорию
-            category_field = page.get_by_role('textbox', name='Категории')
-            if await category_field.count() == 0:
-                category_field = page.locator('input[placeholder*="Категори"], input[name*="categor"]')
-            
-            await category_field.first.click()
-            await page.wait_for_timeout(2000)
-            
-            # Ищем опцию "Десерты"
-            dessert_option = page.locator('.ui-menu-item-wrapper:has-text("Десерты"), .option:has-text("Десерты"), li:has-text("Десерты")')
+            # Ищем и кликаем на "Десерты" в выпадающем списке
+            dessert_option = page.locator('.ui-menu-item:has-text("Десерты")')
             if await dessert_option.count() > 0:
                 await dessert_option.first.click()
                 print("  - Категория 'Десерты' выбрана.")
             else:
-                print("  - Опция 'Десерты' не найдена")
-
-            # Нажимаем поиск
-            search_button = page.get_by_role('button', name='Начать поиск')
-            if await search_button.count() == 0:
-                search_button = page.locator('button:has-text("Поиск"), input[type="submit"]')
-            
-            # Сохраняем старые данные таблицы для сравнения
-            old_table_content = ""
-            try:
-                table = page.locator('table, .table, tbody')
-                if await table.count() > 0:
-                    old_table_content = await table.first.inner_text()
-            except:
-                pass
-            
-            print("Нажимаю кнопку 'Начать поиск'...")
-            await search_button.first.click()
-            
-            # Ждем обновления таблицы - несколько способов
-            table_updated = False
-            max_attempts = 20  # 20 секунд максимум
-            
-            for attempt in range(max_attempts):
+                # Альтернативный способ
+                await category_field.fill("Десерты")
                 await page.wait_for_timeout(1000)
-                
-                try:
-                    # Способ 1: Ждем сетевой запрос
-                    if not table_updated:
-                        try:
-                            await page.wait_for_response(
-                                lambda r: "courses_report" in r.url and r.status == 200, 
-                                timeout=2000
-                            )
-                            table_updated = True
-                            print(f"Получен ответ от сервера на попытке {attempt + 1}")
-                            break
-                        except:
-                            pass
-                    
-                    # Способ 2: Проверяем изменение содержимого таблицы
-                    table = page.locator('table, .table, tbody')
-                    if await table.count() > 0:
-                        current_table_content = await table.first.inner_text()
-                        if current_table_content != old_table_content and current_table_content.strip():
-                            table_updated = True
-                            print(f"Таблица обновилась на попытке {attempt + 1}")
-                            break
-                    
-                    # Способ 3: Проверяем индикатор загрузки
-                    loading_indicator = page.locator('.loading, .spinner, [data-loading="true"]')
-                    if await loading_indicator.count() == 0:
-                        # Если нет индикатора загрузки, даем дополнительное время
-                        if attempt > 5:  # После 5 секунд
-                            table_updated = True
-                            print(f"Нет индикатора загрузки, считаем что данные загружены на попытке {attempt + 1}")
-                            break
-                            
-                except Exception as e:
-                    print(f"Ошибка при проверке обновления таблицы: {e}")
-                    continue
+                await page.keyboard.press('Enter')
+            
+            # Нажимаем кнопку поиска
+            print("Нажимаю кнопку 'Начать поиск'...")
+            search_button = page.locator('button[name="commit"]:has-text("Начать поиск")')
+            await search_button.click()
+            
+            # Ждем обновления таблицы
+            table_updated = await wait_for_table_update(page, old_table_content)
             
             if not table_updated:
-                print("Таблица может быть не обновилась, но продолжаем...")
+                print("Предупреждение: таблица может не обновиться полностью")
             
-            # Дополнительная пауза для стабильности
-            await page.wait_for_timeout(3000)
-            print("Данные должны быть загружены, начинаю сбор информации.")
-
             # --- Шаг 3: Сбор данных из таблицы ---
             log_steps.append("3. Собираю данные из таблицы...")
+            print("\nНачинаю сбор данных из таблицы...")
             
-            # Ищем основную таблицу с данными
-            main_table = page.locator('table.main_table, table.data_table, #courses')
-            if await main_table.count() == 0:
-                main_table = page.locator('table')
+            # Делаем скриншот для отладки
+            await page.screenshot(path="debug_table.png", full_page=False)
             
-            if await main_table.count() > 0:
-                print("Найдена основная таблица с данными")
+            # Ищем таблицу с id="courses"
+            table_selector = '#courses tbody tr'
+            rows = page.locator(table_selector)
+            row_count = await rows.count()
+            
+            print(f"Всего найдено строк в таблице: {row_count}")
+            
+            # Проходим по каждой строке
+            for i in range(row_count):
+                row = rows.nth(i)
                 
-                # Получаем все строки из tbody без использования filter с lambda
-                tbody = main_table.locator('tbody')
-                all_rows = tbody.locator('tr')
+                # Проверяем класс строки - пропускаем строки с классом "table_top"
+                row_class = await row.get_attribute('class') or ""
+                if 'table_top' in row_class:
+                    continue
                 
-                row_count = await all_rows.count()
-                print(f"Всего найдено строк: {row_count}")
+                # Получаем все ячейки в строке
+                cells = row.locator('td')
+                cell_count = await cells.count()
                 
-                # Отфильтровываем строки заголовков вручную
-                data_rows = []
-                for i in range(row_count):
-                    row = all_rows.nth(i)
-                    row_class = await row.get_attribute('class')
+                if cell_count >= 3:
+                    # Индексы ячеек в таблице:
+                    # 0 - № (номер)
+                    # 1 - Наименование
+                    # 2 - Кол-во
+                    # 3 - Средняя цена (отпускная)
+                    # 4 - Сумма (отпускная)
+                    # и т.д.
                     
-                    # Пропускаем строки с классом table_top (заголовки)
-                    if row_class and 'table_top' in row_class:
-                        continue
-                    
-                    data_rows.append(row)
-                
-                print(f"Найдено строк с данными: {len(data_rows)}")
-                
-                for item_name in ITEMS_TO_FIND:
-                    print(f"\nИщу товар: {item_name}")
-                    found = False
-                    
-                    for i, row in enumerate(data_rows):
-                        # Получаем все ячейки в строке
-                        cells = row.locator('td')
-                        cell_count = await cells.count()
+                    try:
+                        # Читаем название из второй ячейки (индекс 1)
+                        name_text = await cells.nth(1).inner_text()
+                        name_text = name_text.strip()
                         
-                        if cell_count >= 3:  # Минимум должно быть 3 ячейки (№, Название, Количество)
-                            # Вторая ячейка - название товара
-                            name_cell = cells.nth(1)
-                            name_text = await name_cell.inner_text()
-                            
-                            if item_name in name_text.strip():
-                                print(f"  ✓ Найден товар в строке {i+1}: {name_text.strip()}")
+                        # Читаем количество из третьей ячейки (индекс 2)
+                        qty_text = await cells.nth(2).inner_text()
+                        qty_text = qty_text.strip()
+                        
+                        print(f"\nСтрока {i+1}:")
+                        print(f"  Название: '{name_text}'")
+                        print(f"  Количество (текст): '{qty_text}'")
+                        
+                        # Проверяем, является ли это одним из искомых товаров
+                        for item_name in ITEMS_TO_FIND:
+                            if item_name in name_text:
+                                print(f"  ✓ Найден товар: {item_name}")
                                 
-                                # Третья ячейка - количество
-                                qty_cell = cells.nth(2)
-                                qty_text = await qty_cell.inner_text()
-                                
-                                print(f"  - Текст ячейки с количеством: '{qty_text.strip()}'")
-                                
-                                # Извлекаем число из ячейки количества
-                                qty_numbers = re.findall(r'\d+', qty_text.strip())
-                                if qty_numbers:
-                                    results[item_name] = int(qty_numbers[0])
-                                    print(f"  ✓ '{item_name}': {results[item_name]} шт.")
-                                else:
-                                    print(f"  ⚠️ Не удалось извлечь число из '{qty_text}'")
-                                
-                                found = True
+                                # Извлекаем число из текста количества
+                                try:
+                                    # Пробуем преобразовать напрямую
+                                    qty = int(qty_text)
+                                    results[item_name] = qty
+                                    print(f"  ✓ Количество: {qty}")
+                                except ValueError:
+                                    # Если не получилось, ищем числа в тексте
+                                    numbers = re.findall(r'\d+', qty_text)
+                                    if numbers:
+                                        qty = int(numbers[0])
+                                        results[item_name] = qty
+                                        print(f"  ✓ Количество (извлечено): {qty}")
+                                    else:
+                                        print(f"  ❌ Не удалось извлечь количество из '{qty_text}'")
                                 break
-                    
-                    if not found:
-                        print(f"  ❌ Товар '{item_name}' не найден в таблице")
                         
-            else:
-                print("❌ Основная таблица не найдена!")
-                # Выводим всю страницу для отладки
-                page_content = await page.content()
-                print("Содержимое страницы (первые 1000 символов):")
-                print(page_content[:1000])
+                    except Exception as e:
+                        print(f"  Ошибка при обработке строки {i+1}: {e}")
+                        continue
+            
+            print(f"\n=== Итоговые результаты ===")
+            for item, qty in results.items():
+                print(f"{item}: {qty} шт.")
 
             # --- Шаг 4: Формирование и отправка отчета ---
             log_steps.append("4. Формирую и отправляю отчет...")
@@ -304,7 +262,7 @@ async def main():
             report_lines.append(f"<b>Всего десертов:</b> {total_items} шт.")
             
             await send_report("\n".join(report_lines))
-            print("Отчет успешно отправлен!")
+            print("\nОтчет успешно отправлен!")
 
         except Exception as e:
             # --- Обработка любой ошибки ---
