@@ -19,7 +19,7 @@ MAX_TIMEOUT = 120000  # 2 минуты
 
 # URL отчета и товары, которые мы ищем
 COURSES_REPORT_URL = "https://app.jowi.club/ru/restaurants/ef62ef82-e7a3-4909-bb8b-906257ebd17c/courses_report"
-ITEMS_TO_FIND = ["Морожний шарик (1шт)", "Пироженное"]
+ITEMS_TO_FIND = ["Мороженое шарик (1шт)", "Пирожное"]
 
 # --- Функции ---
 
