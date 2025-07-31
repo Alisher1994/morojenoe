@@ -2,6 +2,7 @@ import os
 import asyncio
 import traceback
 import datetime
+import re  # Move import to the top
 from playwright.async_api import async_playwright
 from telegram import Bot
 from dotenv import load_dotenv
@@ -213,11 +214,8 @@ async def main():
             await page.wait_for_timeout(3000)
             print("Данные должны быть загружены, начинаю сбор информации.")
 
-            # --- Шаг 3: ИСПРАВЛЕННЫЙ сбор данных из таблицы ---
+            # --- Шаг 3: Сбор данных из таблицы ---
             log_steps.append("3. Собираю данные из таблицы...")
-            
-            # Импортируем regex для работы с числами
-            import re
             
             # Ищем основную таблицу с данными
             main_table = page.locator('table.main_table, table.data_table, #courses')
@@ -227,7 +225,7 @@ async def main():
             if await main_table.count() > 0:
                 print("Найдена основная таблица с данными")
                 
-                # ИСПРАВЛЕНИЕ: Получаем все строки из tbody без использования filter с lambda
+                # Получаем все строки из tbody без использования filter с lambda
                 tbody = main_table.locator('tbody')
                 all_rows = tbody.locator('tr')
                 
