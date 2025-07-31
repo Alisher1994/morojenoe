@@ -215,70 +215,82 @@ async def main():
 
             # --- Шаг 3: ИСПРАВЛЕННЫЙ сбор данных из таблицы ---
             log_steps.append("3. Собираю данные из таблицы...")
-        
-# Импортируем regex для работы с числами
-import re
-        
-# Ищем основную таблицу с данными
-main_table = page.locator('table.main_table, table.data_table, #courses')
-if await main_table.count() == 0:
-    main_table = page.locator('table')
-        
-if await main_table.count() > 0:
-    print("Найдена основная таблица с данными")
             
-    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-    # Получаем все строки из tbody, исключая строки с классом 'table_top'
-    data_rows = main_table.locator('tbody tr:not(.table_top)')
+            # Импортируем regex для работы с числами
+            import re
             
-    row_count = await data_rows.count()
-    print(f"Найдено строк с данными: {row_count}")
+            # Ищем основную таблицу с данными
+            main_table = page.locator('table.main_table, table.data_table, #courses')
+            if await main_table.count() == 0:
+                main_table = page.locator('table')
             
-    for item_name in ITEMS_TO_FIND:
-        print(f"\nИщу товар: {item_name}")
-        found = False
+            if await main_table.count() > 0:
+                print("Найдена основная таблица с данными")
                 
-        for i in range(row_count):
-            row = data_rows.nth(i)
+                # ИСПРАВЛЕНИЕ: Получаем все строки из tbody без использования filter с lambda
+                tbody = main_table.locator('tbody')
+                all_rows = tbody.locator('tr')
+                
+                row_count = await all_rows.count()
+                print(f"Всего найдено строк: {row_count}")
+                
+                # Отфильтровываем строки заголовков вручную
+                data_rows = []
+                for i in range(row_count):
+                    row = all_rows.nth(i)
+                    row_class = await row.get_attribute('class')
                     
-            # Получаем все ячейки в строке
-            cells = row.locator('td')
-            cell_count = await cells.count()
+                    # Пропускаем строки с классом table_top (заголовки)
+                    if row_class and 'table_top' in row_class:
+                        continue
                     
-            if cell_count >= 3:  # Минимум должно быть 3 ячейки (№, Название, Количество)
-                # Вторая ячейка - название товара
-                name_cell = cells.nth(1)
-                name_text = await name_cell.inner_text()
+                    data_rows.append(row)
+                
+                print(f"Найдено строк с данными: {len(data_rows)}")
+                
+                for item_name in ITEMS_TO_FIND:
+                    print(f"\nИщу товар: {item_name}")
+                    found = False
+                    
+                    for i, row in enumerate(data_rows):
+                        # Получаем все ячейки в строке
+                        cells = row.locator('td')
+                        cell_count = await cells.count()
                         
-                if item_name in name_text.strip():
-                    print(f"  ✓ Найден товар в строке {i+1}: {name_text.strip()}")
+                        if cell_count >= 3:  # Минимум должно быть 3 ячейки (№, Название, Количество)
+                            # Вторая ячейка - название товара
+                            name_cell = cells.nth(1)
+                            name_text = await name_cell.inner_text()
                             
-                    # Третья ячейка - количество
-                    qty_cell = cells.nth(2)
-                    qty_text = await qty_cell.inner_text()
-                            
-                    print(f"  - Текст ячейки с количеством: '{qty_text.strip()}'")
-                            
-                    # Извлекаем число из ячейки количества
-                    qty_numbers = re.findall(r'\d+', qty_text.strip())
-                    if qty_numbers:
-                        results[item_name] = int(qty_numbers[0])
-                        print(f"  ✓ '{item_name}': {results[item_name]} шт.")
-                    else:
-                        print(f"  ⚠️ Не удалось извлечь число из '{qty_text}'")
-                            
-                    found = True
-                    break
-            
-        if not found:
-            print(f"  ❌ Товар '{item_name}' не найден в таблице")
-                
-else:
-    print("❌ Основная таблица не найдена!")
-    # Выводим всю страницу для отладки
-    page_content = await page.content()
-    print("Содержимое страницы (первые 1000 символов):")
-    print(page_content[:1000])
+                            if item_name in name_text.strip():
+                                print(f"  ✓ Найден товар в строке {i+1}: {name_text.strip()}")
+                                
+                                # Третья ячейка - количество
+                                qty_cell = cells.nth(2)
+                                qty_text = await qty_cell.inner_text()
+                                
+                                print(f"  - Текст ячейки с количеством: '{qty_text.strip()}'")
+                                
+                                # Извлекаем число из ячейки количества
+                                qty_numbers = re.findall(r'\d+', qty_text.strip())
+                                if qty_numbers:
+                                    results[item_name] = int(qty_numbers[0])
+                                    print(f"  ✓ '{item_name}': {results[item_name]} шт.")
+                                else:
+                                    print(f"  ⚠️ Не удалось извлечь число из '{qty_text}'")
+                                
+                                found = True
+                                break
+                    
+                    if not found:
+                        print(f"  ❌ Товар '{item_name}' не найден в таблице")
+                        
+            else:
+                print("❌ Основная таблица не найдена!")
+                # Выводим всю страницу для отладки
+                page_content = await page.content()
+                print("Содержимое страницы (первые 1000 символов):")
+                print(page_content[:1000])
 
             # --- Шаг 4: Формирование и отправка отчета ---
             log_steps.append("4. Формирую и отправляю отчет...")
